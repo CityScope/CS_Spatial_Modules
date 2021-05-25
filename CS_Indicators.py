@@ -77,18 +77,18 @@ def get_central_nodes(geodf, G):
 
 
 class Proximity_Indicator(Indicator):
-    def setup(self, zones, geogrid, buffer=1200):
+    def setup(self, zones, geogrid, buffer=1200, pois=None, poi_names=None, score_dict=None):
         print('Setting up Proximity Indicator')
         self.name='Proximity'
+        self.indicator_type = 'hybrid'
         self.zone_to_node_tolerance=500
         self.grid_to_node_tolerance=100
         self.naics_codes=[col for col in zones.columns if 'naics' in col]
         self.buffer=buffer
         self.zones=zones
-        self.indicator_type = 'hybrid'
         self.geogrid=geogrid
         self.overlapping_geoids=list(zones.loc[zones['sim_area']].index)
-        self.all_site_ids=self.overlapping_geoids+list(range(len(geogrid)))  
+        self.all_site_ids=self.overlapping_geoids+list(range(len(geogrid))) 
         self.get_graph_reference_area()
         
         print('\t Getting central nodes')
@@ -100,6 +100,22 @@ class Proximity_Indicator(Indicator):
         self.geogrid['central_node']=grid_nearest_nodes
         self.geogrid['nearest_dist']=grid_nearest_dist
 
+        self.pois=pois
+        self.poi_names=poi_names
+        if pois is not None:
+            poi_nearest_nodes, poi_nearest_dist= get_central_nodes(self.pois, self.ref_G)
+            self.pois['central_node']=poi_nearest_nodes
+            self.pois['nearest_dist']=poi_nearest_dist
+
+        self.score_dict=score_dict
+        if score_dict==None:
+            score_dict={'walkable_housing': {'col':'res_total', 'from': 'source_emp'},
+                            'walkable_employment': {'col':'emp_total', 'from': 'source_res'},
+                            'walkable_healthcare': {'col':'emp_naics_62', 'from': 'source_res'},
+                            'walkable_hospitality': {'col':'emp_naics_72', 'from': 'source_res'},
+                            'walkable_shopping': {'col':'emp_naics_44-45', 'from': 'source_res'}}
+            for name in poi_names:
+                score_dict[name]={'walkable_{}'.format(name): {'col': name, 'from': 'source_res'}}
         self.get_reachable_geoms_from_all()
         self.calculate_baseline_scores()
             
@@ -136,6 +152,12 @@ class Proximity_Indicator(Indicator):
             self.base_attributes[ind]=self.zones.loc[reachable_zones][stats_to_aggregate].sum().to_dict()
             self.base_attributes[ind]['source_res']=row['res_total']
             self.base_attributes[ind]['source_emp']=row['emp_total']
+            # Add the aggregated point POIs if there are any
+            if self.pois is not None:
+            	reachable_pois=self.zone_to_reachable[ind]['pois']
+            	agg_reachable_poi=self.pois.loc[reachable_pois].sum()
+            	for name in self.poi_names:
+            		self.base_attributes[ind][name]=agg_reachable_poi[name]
             # get scores for individual zones- weighting cancels out
             base_scores[ind]=self.attributes_to_scores([self.base_attributes[ind]])
             
@@ -154,11 +176,16 @@ class Proximity_Indicator(Indicator):
         for i_c in range(len(self.geogrid)):
             reachable_zones=self.grid_to_reachable[i_c]['zones']
             self.base_attributes[i_c]=self.zones.loc[reachable_zones][stats_to_aggregate].sum().to_dict()
+            if self.pois is not None:
+            	reachable_pois=self.grid_to_reachable[i_c]['pois']
+            	agg_reachable_poi=self.pois.loc[reachable_pois].sum()
+            	for name in self.poi_names:
+            		self.base_attributes[i_c][name]=agg_reachable_poi[name]
             
             
     def get_reachable_geoms(self, zone, tolerance):
         """
-        find all grid cells and all zones reachable from a geometry
+        find all grid cells, zones and point POIs reachable from a geometry
         """
         sub_graph=self.make_ego_graph_around_geometry(zone, tolerance)
         sub_graph_nodes=sub_graph.nodes(data=False)
@@ -171,12 +198,20 @@ class Proximity_Indicator(Indicator):
                     (self.geogrid['central_node'].isin(list(sub_graph_nodes)))&
                     (self.geogrid['nearest_dist']<self.grid_to_node_tolerance))
                 ].index.values)
-        return {'zones': reachable_zones, 'cells': reachable_grid_cells}
+        reachable={'zones': reachable_zones, 'cells': reachable_grid_cells}
+        if self.pois is not None:
+            reachable_pois=list(self.pois.loc[
+                (
+                    (self.pois['central_node'].isin(list(sub_graph_nodes)))&
+                    (self.pois['nearest_dist']<self.grid_to_node_tolerance))
+                ].index.values)
+            reachable['pois']= reachable_pois   	
+        return reachable
     
     def get_reachable_geoms_from_all(self):
         """
-        For every grid cell and every zone which intersects the grid:
-        find the reachable zones and reachable grid cells
+        For every grid cell and every reference area zone:
+        	find the reachable zones,  grid cells and POIs
         """
         print('\t Finding all reachable geometries from each geometry')
         self.grid_to_reachable, self.zone_to_reachable={}, {}
@@ -184,7 +219,7 @@ class Proximity_Indicator(Indicator):
             self.grid_to_reachable[ind]=self.get_reachable_geoms(row, self.grid_to_node_tolerance)
         for ind, row in self.zones.loc[self.zones['reference_area']].iterrows():
             self.zone_to_reachable[ind]=self.get_reachable_geoms(row, self.zone_to_node_tolerance)
-        # create a reverse lookup to map from eacg grid cell to the cells from which it is reachable
+        # create a reverse lookup to map from each grid cell to the cells from which it is reachable
         self.grid_to_reverse_reachable={}
         for i, row_i in self.geogrid.iterrows():
             self.grid_to_reverse_reachable[i]={'zones': [], 'cells': []}
@@ -195,17 +230,15 @@ class Proximity_Indicator(Indicator):
                 if i in self.zone_to_reachable[ind_z]['cells']:
                     self.grid_to_reverse_reachable[i]['zones'].append(ind_z)                    
             
-    def attributes_to_scores(self, attributes):        
-        total_emp=sum([s['source_emp'] for s in attributes])
-        total_res=sum([s['source_res'] for s in attributes])
+    def attributes_to_scores(self, attributes):  
+    	# TODO: more flexibly caclulate scores based on supplied data      
+        totals={}
+        totals['source_res']=sum([s['source_res'] for s in attributes])
+        totals['source_emp']=sum([s['source_res'] for s in attributes])
 
         scores={}
-
-        scores['walkable_housing']=sum([s['source_emp']*s['res_total'] for s in attributes])/total_emp
-        scores['walkable_employment']=sum([s['source_res']*s['emp_total'] for s in attributes])/total_res
-        scores['walkable_healthcare']=sum([s['source_res']*s['emp_naics_62'] for s in attributes])/total_res
-        scores['walkable_hospitality']=sum([s['source_res']*s['emp_naics_72'] for s in attributes])/total_res
-        scores['walkable_shopping']=sum([s['source_res']*s['emp_naics_44-45'] for s in attributes])/total_res
+        for score_name in self.score_dict:
+	        scores[score_name]=sum([s[self.score_dict[score_name]['from']]*s[self.score_dict[score_name]['col']] for s in attributes])/totals[self.score_dict[score_name]['from']]
         return scores
     
     def return_indicator(self, geogrid_data):
@@ -236,7 +269,7 @@ class Proximity_Indicator(Indicator):
     
     
     def get_new_reachable_attributes(self, geogrid_data):
-        new_attributes=copy.deepcopy(self.base_attributes)
+        new_attributes=copy.deepcopy(self.base_attributes) # the updated REACHABLE attributes for every zone and cell
         side_length=geogrid_data.get_geogrid_props()['header']['cellSize']
         cell_area=side_length*side_length
         type_def=geogrid_data.get_type_info()
@@ -256,7 +289,10 @@ class Proximity_Indicator(Indicator):
             agg_lbcs=aggregate_attributes_over_grid(
                 {name: total_capacity}, 'LBCS', side_length, type_def, digits=1)
 
-            added_attributes={}
+            added_attributes={} # the new attributes of THIS cell
+            # For point POIs: 1 floor = 1 point
+            if name in self.poi_names:
+            	added_attributes[name]=height
             cell_employment=sum(agg_naics.values())
             new_attributes[i_c]['source_emp']=cell_employment
             added_attributes['emp_total']=cell_employment
@@ -294,28 +330,25 @@ class Proximity_Indicator(Indicator):
         return norm_ind
 
 
-    def compute_heatmaps(self, grid_reachable_area_stats):
+    def compute_heatmaps(self, grid_reachable_area_stats, sample_ratio=4):
         max_scores={score: self.base_zones_scores[score].max() for score in self.base_zones_scores}
         features=[]
         heatmap={'type': 'FeatureCollection',
-                 'properties': ['housing', 'employment', 'healthcare', 'hospitality', 'shopping']}
+                 'properties': [c.split('_')[1] for c in self.score_dict]}
         x_centroid_list, y_centroid_list=self.geogrid['x_centroid'], self.geogrid['y_centroid']
         for i_c, cell_stats in enumerate(grid_reachable_area_stats):
-            features.append({
-              "type": "Feature",
-              "properties": [min((cell_stats['res_total']/max_scores['walkable_housing']), 1), 
-                             min((cell_stats['emp_total']/max_scores['walkable_employment']), 1),
-                             min((cell_stats['emp_naics_62']/max_scores['walkable_healthcare']), 1), 
-                             min((cell_stats['emp_naics_72']/max_scores['walkable_hospitality']), 1), 
-                             min((cell_stats['emp_naics_44-45']/max_scores['walkable_shopping']), 1)],
-              "geometry": {
-                "type": "Point",
-                "coordinates": [
-                  x_centroid_list[i_c],
-                  y_centroid_list[i_c]
-                ]
-              }
-            })
+        	if i_c%sample_ratio==0:
+	            features.append({
+	              "type": "Feature",
+	              "properties": [min((cell_stats[self.score_dict[s]['col']]/max_scores[s]), 1) for s in self.score_dict],
+	              "geometry": {
+	                "type": "Point",
+	                "coordinates": [
+	                  x_centroid_list[i_c],
+	                  y_centroid_list[i_c]
+	                ]
+	              }
+	            })
         heatmap['features']=features
         return heatmap
       
@@ -789,7 +822,7 @@ class Mobility_indicator(Indicator):
     def post_trips(self, deckgl_trips):
         post_url='https://cityio.media.mit.edu/api/table/'+self.table_name
         r = requests.post(post_url+'/ABM2', data = json.dumps(deckgl_trips),
-        	headers={'Content-Type': 'application/json'})
+            headers={'Content-Type': 'application/json'})
         print('Post ABM: {}'.format(r))
 
 
