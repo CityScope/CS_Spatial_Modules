@@ -77,7 +77,7 @@ def get_central_nodes(geodf, G):
 
 
 class Proximity_Indicator(Indicator):
-    def setup(self, zones, geogrid, buffer=1200, pois=None, poi_names=None, score_dict=None):
+    def setup(self, zones, geogrid, buffer=1200, pois=None, poi_names=[], score_dict=None, limit_factor=2):
         print('Setting up Proximity Indicator')
         self.name='Proximity'
         self.indicator_type = 'hybrid'
@@ -108,14 +108,14 @@ class Proximity_Indicator(Indicator):
             self.pois['nearest_dist']=poi_nearest_dist
 
         self.score_dict=score_dict
-        if score_dict==None:
-            score_dict={'walkable_housing': {'col':'res_total', 'from': 'source_emp'},
+        if self.score_dict==None:
+            self.score_dict={'walkable_housing': {'col':'res_total', 'from': 'source_emp'},
                             'walkable_employment': {'col':'emp_total', 'from': 'source_res'},
                             'walkable_healthcare': {'col':'emp_naics_62', 'from': 'source_res'},
                             'walkable_hospitality': {'col':'emp_naics_72', 'from': 'source_res'},
                             'walkable_shopping': {'col':'emp_naics_44-45', 'from': 'source_res'}}
             for name in poi_names:
-                score_dict[name]={'walkable_{}'.format(name): {'col': name, 'from': 'source_res'}}
+                self.score_dict[name]={'walkable_{}'.format(name): {'col': name, 'from': 'source_res'}}
         self.get_reachable_geoms_from_all()
         self.calculate_baseline_scores()
             
@@ -238,7 +238,10 @@ class Proximity_Indicator(Indicator):
 
         scores={}
         for score_name in self.score_dict:
-	        scores[score_name]=sum([s[self.score_dict[score_name]['from']]*s[self.score_dict[score_name]['col']] for s in attributes])/totals[self.score_dict[score_name]['from']]
+        	if totals[self.score_dict[score_name]['from']]==0:
+        		scores[score_name]=0
+        	else:
+	        	scores[score_name]=sum([s[self.score_dict[score_name]['from']]*s[self.score_dict[score_name]['col']] for s in attributes])/totals[self.score_dict[score_name]['from']]
         return scores
     
     def return_indicator(self, geogrid_data):
@@ -330,25 +333,24 @@ class Proximity_Indicator(Indicator):
         return norm_ind
 
 
-    def compute_heatmaps(self, grid_reachable_area_stats, sample_ratio=4):
+    def compute_heatmaps(self, grid_reachable_area_stats):
         max_scores={score: self.base_zones_scores[score].max() for score in self.base_zones_scores}
         features=[]
         heatmap={'type': 'FeatureCollection',
                  'properties': [c.split('_')[1] for c in self.score_dict]}
         x_centroid_list, y_centroid_list=self.geogrid['x_centroid'], self.geogrid['y_centroid']
         for i_c, cell_stats in enumerate(grid_reachable_area_stats):
-        	if i_c%sample_ratio==0:
-	            features.append({
-	              "type": "Feature",
-	              "properties": [min((cell_stats[self.score_dict[s]['col']]/max_scores[s]), 1) for s in self.score_dict],
-	              "geometry": {
-	                "type": "Point",
-	                "coordinates": [
-	                  x_centroid_list[i_c],
-	                  y_centroid_list[i_c]
-	                ]
-	              }
-	            })
+            features.append({
+              "type": "Feature",
+              "properties": [min((cell_stats[self.score_dict[s]['col']]/max_scores[s]), 1) for s in self.score_dict],
+              "geometry": {
+                "type": "Point",
+                "coordinates": [
+                  x_centroid_list[i_c],
+                  y_centroid_list[i_c]
+                ]
+              }
+            })
         heatmap['features']=features
         return heatmap
       
