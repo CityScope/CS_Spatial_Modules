@@ -46,18 +46,19 @@ def aggregate_attributes_over_grid(agg_types, attribute, side_length, type_def, 
     aggregated={}
     for cell_type in agg_types:
         type_info=type_def[cell_type]
-        if type_info[attribute] is not None:
-            total_capacity=agg_types[cell_type]
-            for code in type_info[attribute]:
-                if digits==None:
-                    code_digits=code
-                else:
-                    code_digits=code[0:digits]
-                attr_capacity=total_capacity*type_info[attribute][code]
-                if code_digits in aggregated:
-                    aggregated[code_digits]+= attr_capacity
-                else:
-                    aggregated[code_digits]= attr_capacity
+        if attribute in type_info:
+            if type_info[attribute] is not None:
+                total_capacity=agg_types[cell_type]
+                for code in type_info[attribute]:
+                    if digits==None:
+                        code_digits=code
+                    else:
+                        code_digits=code[0:digits]
+                    attr_capacity=total_capacity*type_info[attribute][code]
+                    if code_digits in aggregated:
+                        aggregated[code_digits]+= attr_capacity
+                    else:
+                        aggregated[code_digits]= attr_capacity
     return aggregated
 
 def get_central_nodes(geodf, G):
@@ -417,14 +418,16 @@ class Density_Indicator(Indicator):
             type_def=geogrid_data.get_type_info()
             agg_types=aggregate_types_over_grid(geogrid_data, side_length=side_length, type_def=type_def)
             agg_naics=aggregate_attributes_over_grid(agg_types, 'NAICS', side_length=side_length, type_def=type_def, digits=2)
-            agg_lbcs=aggregate_attributes_over_grid(agg_types, 'LBCS', side_length=side_length, type_def=type_def, digits=1)
+#             agg_lbcs=aggregate_attributes_over_grid(agg_types, 'LBCS', side_length=side_length, type_def=type_def, digits=1)
+            agg_res=aggregate_attributes_over_grid(agg_types, 'res_income', side_length=side_length, type_def=type_def, digits=1)
             
             # update total residential and total employment
             add_emp=sum(agg_naics.values())
-            if '1' in agg_lbcs:
-                add_res=agg_lbcs['1']
-            else:
-                add_res=0    
+            add_res=sum(agg_res.values())
+#             if '1' in agg_lbcs:
+#                 add_res=agg_lbcs['1']
+#             else:
+#                 add_res=0    
             temp_site_stats['res_total']+=add_res
             temp_site_stats['emp_total']+=add_emp
             
@@ -437,13 +440,20 @@ class Density_Indicator(Indicator):
                         if code in agg_naics:
                             temp_site_stats[col]+=agg_naics[code]  
                             
-            # update residential types
-            if 'Residential Low Income' in agg_types:
-                temp_site_stats['res_income_low']+=agg_types['Residential Low Income']
-            if 'Residential Med Income' in agg_types:
-                temp_site_stats['res_income_mid']+=agg_types['Residential Med Income']
-            if 'Residential High Income' in agg_types:
-                temp_site_stats['res_income_high']+=agg_types['Residential High Income']          
+            # update residents for each income level
+            for col in temp_site_stats:
+                if 'res_income_' in col:
+                    income_level=col.split('res_income_')[1]
+                    if income_level in agg_res:
+                        temp_site_stats[col]+=agg_res[income_level]             
+                            
+#             # update residential types
+#             if 'Residential Low Income' in agg_types:
+#                 temp_site_stats['res_income_low']+=agg_types['Residential Low Income']
+#             if 'Residential Med Income' in agg_types:
+#                 temp_site_stats['res_income_mid']+=agg_types['Residential Med Income']
+#             if 'Residential High Income' in agg_types:
+#                 temp_site_stats['res_income_high']+=agg_types['Residential High Income']          
         return temp_site_stats
 
     

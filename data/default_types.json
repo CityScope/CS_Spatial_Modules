@@ -52,6 +52,7 @@
     "sqm_pperson": 1
   },
   "Residential Low Income": {
+  	"res_income": {"low": 1},
     "LBCS": [
       {
         "proportion": 1,
@@ -73,6 +74,7 @@
     "sqm_pperson": 50
   },
   "Residential Med Income": {
+  	"res_income": {"mid": 1},
     "LBCS": [
       {
         "proportion": 1,
@@ -94,6 +96,7 @@
     "sqm_pperson": 90
   },
   "Residential High Income": {
+  	"res_income": {"high": 1},
     "LBCS": [
       {
         "proportion": 1,
