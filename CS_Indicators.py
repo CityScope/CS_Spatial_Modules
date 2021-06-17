@@ -16,6 +16,7 @@ import numpy as np
 import sys
 import pandas as pd
 import copy
+import random
 
 """
 """
@@ -76,6 +77,12 @@ def get_central_nodes(geodf, G):
     nearest_nodes=[node_order[ind] for ind in ind_nearest]
     return nearest_nodes, dist
 
+def prob_floor(num):
+    result=int(num)
+    remainder=num-result
+    if random.uniform(0, 1)<remainder:
+        result+=1
+    return result
 
 class Proximity_Indicator(Indicator):
     def setup(self, zones, geogrid, buffer=1200, pois=None, poi_names=[], score_dict=None, limit_factor=2):
@@ -566,9 +573,14 @@ def mode_choice_model(all_trips_df):
     return all_trips_df
 
 class Mobility_indicator(Indicator):
-    def setup(self, zones, geogrid, table_name, simpop_df, external_hw_tags=["motorway","motorway_link","trunk","trunk_link"]):
-        self.N_max=250
+    def setup(self, zones, geogrid, table_name, simpop_df, 
+              external_hw_tags=["motorway","motorway_link","trunk","trunk_link"],
+             mode_descriptions=None, profile_descriptions=None,
+             simpop_sample_frac=1, N_max=250):
+        self.N_max=N_max
+        self.simpop_sample_frac=simpop_sample_frac
         self.name='Mobility'
+        self.create_trip_descriptions(mode_descriptions, profile_descriptions)
         self.geogrid=geogrid
         self.external_hw_tags=external_hw_tags
         self.zones=zones
@@ -584,6 +596,28 @@ class Mobility_indicator(Indicator):
         self.sim=OpenCity.Simulation(simpop_df, self.mob_sys, combined_zones, sim_geoids=sim_geoids)
         self.sim.set_choice_models(mode_chooser=mode_choice_model)
         self.create_zone_dist_mat()
+    
+    def create_trip_descriptions(self, mode_descriptions, profile_descriptions):
+        if mode_descriptions is None:
+            mode_descriptions = [{"name": 'drive',
+                                'color': "#e41a1d"},
+                                 {"name": 'cycle',
+                                'color': "#377eb8"},
+                                 {"name": 'walk',
+                                'color': "#4daf4a"},
+                                 {"name": 'pt',
+                                'color': "#ffff33"},
+                                ]
+        if profile_descriptions is None:
+            profile_descriptions = [{"name": 'low',
+                                'color': "#7fc97f"},
+                                 {"name": 'mid',
+                                'color': "#beaed4"},
+                                 {"name": 'high',
+                                'color': "#fdc086"},
+                                ]
+        self.mode_descriptions=mode_descriptions
+        self.profile_descriptions=profile_descriptions
 
     def create_grid_zones(self):
         grid_zones=self.geogrid.copy()
@@ -683,44 +717,22 @@ class Mobility_indicator(Indicator):
         
         
     def routes_to_deckgl_trip(self, route_table):
+        mode_legend={}
+        for i in range(len(self.mode_descriptions)):
+            name=self.mode_descriptions[i]['name']
+            mode_legend[str(i)]={"color": self.mode_descriptions[i]['color'],
+                                "name": "{} : {}%".format(name.title(),
+                                                         100*sum(route_table['mode']==name)/len(route_table))}
+        profile_legend={}
+        for i in range(len(self.profile_descriptions)):
+            name=self.profile_descriptions[i]['name']
+            profile_legend[str(i)]={"color": self.profile_descriptions[i]['color'],
+                                "name": 'Income '+str(name)}
+        legend={'mode': mode_legend, "profile": profile_legend}
         
-        mode_id_map={'drive': "0", "cycle": "1", "walk": "2", "pt": "3"}
-        profile_id_map={'low':"0", 'mid':"1",  'high':"2"}
+        mode_id_map={self.mode_descriptions[i]['name']: i for i in range(len(self.mode_descriptions))}
+        profile_id_map={self.profile_descriptions[i]['name']: i for i in range(len(self.profile_descriptions))}
         
-        mode_split={}
-        for mode in mode_id_map:
-            mode_split[mode]=100*sum(route_table['mode']==mode)/len(route_table)
-        attr_map={"mode": {
-                    "0": {
-                    "color": "#e41a1d",
-                    "name": "Drive : {}%".format(mode_split['drive'])
-                    },
-                    "1": {
-                    "color": "#377eb8",
-                    "name": "Cycle : {}%".format(mode_split['cycle'])
-                    },
-                    "2": {
-                    "color": "#4daf4a",
-                    "name": "Walk : {}%".format(mode_split['walk'])
-                    },
-                    "3": {
-                    "color": "#ffff33",
-                    "name": "Public Transport : {}%".format(mode_split['pt'])
-                    }},
-                 "profile": {
-                    "0": {
-                    "color": "#7fc97f",
-                    "name": "Low Income"
-                    },
-                    "1": {
-                    "color": "#beaed4",
-                    "name": "Med Income"
-                    },
-                    "2": {
-                    "color": "#fdc086",
-                    "name": "High Income"
-                    }}}
-                    #         earnings_to_ind={'u1250': 0, '1250to3333': 1, '3333plus': 2}
         trips=[]
         for ind, row in route_table.iterrows():
             coords=[[int(c[0]*1e5)/1e5, int(c[1]*1e5)/1e5] for c in row['attributes']['coordinates']]
@@ -730,13 +742,10 @@ class Mobility_indicator(Indicator):
                 start_time=int(row['start_time'])
                 timestamps=[int(start_time)] + [int(start_time)+ int(ct) for ct in cum_time]
                 this_trip={'path': coords, 'timestamps': timestamps}
-#                 for attr in ['earnings']:
-#                     this_trip[attr]=row[attr]
-#                 this_trip['earnings']=earnings_to_ind[row['earnings']]
                 this_trip['mode']=mode_id_map[row['mode']],
                 this_trip['profile']=profile_id_map[row['earnings']]
                 trips.append(this_trip)
-        return {'attr': attr_map, 'trips': trips}
+        return {'attr': legend, 'trips': trips}
     
     def geogrid_updates(self, geogrid_data):
         new_simpop=[]
@@ -759,14 +768,12 @@ class Mobility_indicator(Indicator):
                     sqm_pperson=50
                 total_capacity=height*cell_area/sqm_pperson
                 # update where the residential capacity exists
-                if 'Residential' in name:
-                    self.sim.zones.loc[i_c, 'res_total']=total_capacity
-                    if name=='Residential Low Income':
-                        self.sim.zones.loc[i_c, 'res_income_low']=total_capacity
-                    elif name=='Residential Med Income':
-                        self.sim.zones.loc[i_c, 'res_income_mid']=total_capacity
-                    elif name=='Residential High Income':
-                        self.sim.zones.loc[i_c, 'res_income_high']=total_capacity
+                if ('res_income' in type_info):
+                    if type_info['res_income'] is not None:
+                        self.sim.zones.loc[i_c, 'res_total']=total_capacity
+                        for income_level in type_info['res_income']:
+                            self.sim.zones.loc[i_c, 'res_income_{}'.format(income_level)
+                                              ]=type_info['res_income'][income_level]*total_capacity
         for i_c, cell in enumerate(geogrid_data):
             name=cell['name']
             type_info=type_def[name]
@@ -779,15 +786,18 @@ class Mobility_indicator(Indicator):
                     sqm_pperson=type_info['sqm_pperson']
                 else:
                     sqm_pperson=50
-                total_capacity=height*cell_area/sqm_pperson                    
+                total_capacity=self.simpop_sample_frac*height*cell_area/sqm_pperson
                 # update the agents
                 if type_info['NAICS'] is not None:
-                    workers={code: int(type_info['NAICS'][code]*total_capacity) for code in  type_info['NAICS']}   
+                    workers={code: prob_floor(type_info['NAICS'][code]*total_capacity) for code in  type_info['NAICS']}   
                     for code in workers:
-                        home_locations=self.sample_home_locations(i_c, 'high', n=workers[code])
+                        # TODO: choose the income level based on a mapping from NAICS to income level
+                        # estimate from the available data
+                        profile=random.sample([p['name'] for p in self.profile_descriptions], 1)[0]
+                        home_locations=self.sample_home_locations(i_c, profile, n=workers[code])
                         for i_w in range(workers[code]):
                             new_simpop.append({'work_geoid': i_c,'home_geoid': home_locations[i_w],
-                                               'naics': code, 'earnings': 'high',
+                                               'naics': code, 'earnings': profile,
                                               'age': '30-54'})
 
         return new_simpop
@@ -795,8 +805,8 @@ class Mobility_indicator(Indicator):
     def sample_home_locations(self, work_geoid, earnings, n):
         attraction=self.sim.zones['res_income_{}'.format(earnings)]
         impedance=[self.dist_mat[hid][work_geoid] for hid in self.sim.zones.index]
-        # weights=np.divide(attraction,np.array(impedance))
-        weights=np.array(attraction)
+        weights=np.divide(attraction,np.array(impedance))
+#         weights=np.array(attraction)
         return np.random.choice(
             self.sim.zones.index, replace=True, p=weights/sum(weights), size=n)
         
@@ -818,13 +828,18 @@ class Mobility_indicator(Indicator):
     
     def return_indicator(self, geogrid_data):
         print('Starting MM Update')
+        start_calc=datetime.datetime.now()
         new_simpop=self.geogrid_updates(geogrid_data)
         new_simpop_df=pd.DataFrame(new_simpop)
         combined_simpop=self.base_simpop_df.append(new_simpop_df)
         sample_simpop_df=combined_simpop.sample(min(self.N_max, len(combined_simpop)))
         deckgl_trips, ind=self.simulate(sample_simpop_df)
+        end_calc=datetime.datetime.now()
         self.post_trips(deckgl_trips)
+        end_post=datetime.datetime.now()
         print('Finished MM Update')
+        print('\t calculation took {}'.format(end_calc-start_calc))
+        print('\t trips post took {}'.format(end_post-end_calc))
         return {'name': 'Active Mobility',
                            'raw_value': ind,
                            'value': ind,
