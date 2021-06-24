@@ -1,5 +1,9 @@
 import osmnx
 import pandas as pd
+import geopandas as gpd
+"""
+Need osmnx installed to import this module
+"""
 
 def simplify_network(G, tolerance=10):
     Gp=osmnx.projection.project_graph(G)
@@ -18,10 +22,66 @@ def pre_compute_paths(G, weight_metric='travel_time', save_route_costs=False):
     fw_pred, fw_dist=osmnx.graph.nx.floyd_warshall_predecessor_and_distance(
         G, weight=weight_metric)
     if save_route_costs:
-    	return fw_pred, fw_dist
+        return fw_pred, fw_dist
     else:
-    	return fw_pred
- 
+        return fw_pred
+
+def get_graph_buffered_to_hw_type(geom, external_hw_tags, network_type):
+    for buffer in [i*200 for i in range(1, 10)]:
+        print('Buffer : {}'.format(buffer))
+        geom_projected=osmnx.projection.project_gdf(geom)
+        geom_projected_buffered=geom_projected.unary_union.buffer(buffer)
+
+        geom_projected_buffered_gdf=gpd.GeoDataFrame(geometry=[geom_projected_buffered], crs=geom_projected.crs)
+        geom_wgs_buffered_gdf=geom_projected_buffered_gdf.to_crs(geom.crs) 
+
+        G_temp=osmnx.graph.graph_from_polygon(geom_wgs_buffered_gdf.iloc[0]['geometry'], network_type=network_type)
+        all_hw_tags=[e[2]['highway'] for e in G_temp.edges(data=True)]
+
+        if any([tag in all_hw_tags for tag in external_hw_tags]):
+            return G_temp
+        print('Doesnt contain external link types')
+    print('Warning: internal network will not connect to external network')
+    return G_temp 
+
+def create_2_scale_osmnx_network(sim_area_gdf, model_area_gdf, add_modes=[], osm_mode='drive', 
+                               external_hw_tags=["motorway","motorway_link","trunk","trunk_link"]):
+    """
+    This function will create a single network using all driving links
+    Network will composed of all links in the (buffered) sim area and 
+    certain types of links in the external model area as defined in 'external_hw_tags'
+    If modes other than driving will use this networ (eg. bicycles, motorbikes), they should be specified in add_modes
+    add_modes is list of modes (excluding driving) of the form {'name': 'cycle', 'speed': 4800/3600}
+    """
+    print('getting internal roads')
+    G_sim = get_graph_buffered_to_hw_type(sim_area_gdf, external_hw_tags, osm_mode)
+    print('getting external roads')
+    G_model=osmnx.graph_from_polygon(model_area_gdf.unary_union,
+                             network_type=osm_mode, custom_filter='["highway"~"{}"]'.format('|'.join(external_hw_tags)))
+    G_combined=osmnx.graph.nx.compose(G_model,G_sim)
+    
+    G_combined=osmnx.add_edge_speeds(G_combined)
+    G_combined=simplify_network(G_combined)
+    G_combined=osmnx.add_edge_travel_times(G_combined)
+    for edge in list(G_combined.edges):
+        G_combined.edges[edge]['travel_time_drive']=G_combined.edges[edge]['travel_time']
+    for mode in add_modes:
+        for edge in list(G_combined.edges):
+            G_combined.edges[edge]['travel_time_{}'.format(mode['name'])]=G_combined.edges[edge]['length']/mode['speed']  
+    G_combined=osmnx.utils_graph.get_undirected(G_combined)
+    
+    fw_all, route_lengths=pre_compute_paths(G_combined, 
+                                            weight_metric='length',
+                                            save_route_costs=True)
+    pre_comp_net=PreCompOSMNet(G_combined, fw_all)
+    networks={'drive': pre_comp_net}
+    
+    mode_dicts= {'drive': {'target_network_id': 'drive','travel_time_metric': 'travel_time_drive'}}
+    for mode in add_modes:
+        name=mode['name']
+        # all use the 'driving' network but with differnt travel times
+        mode_dicts[name]={'target_network_id': 'drive','travel_time_metric': 'travel_time_{}'.format(name)}    
+    return networks, mode_dicts, route_lengths 
 
 class PreCompOSMNet():
     def __init__(self, G, pred):

@@ -1,5 +1,5 @@
 from brix import Indicator, Handler
-import OpenCity
+import Simulation
 import PreCompOsmNet
 import statsmodels
 from statsmodels.distributions.empirical_distribution import ECDF
@@ -544,57 +544,32 @@ class Density_Indicator(Indicator):
         else:
             return float('nan')
 
-def mode_choice_model(all_trips_df):
-#     all_trips_df['mode']=random.choices(['walk', 'drive'], k=len(all_trips_df))
-    # all_trips_df['route_distance']=all_trips_df.apply(lambda row: m.route_lengths[row['from_possible_nodes_drive'][0]]
-    #                                                                     [row['to_possible_nodes_drive'][0]], axis=1)
-    options=['drive', 'cycle', 'walk', 'pt']
-    all_trips_df['mode']='drive'
-    ind_u1500=all_trips_df['route_distance']<1500
-    ind_1500_5k=((all_trips_df['route_distance']>1500)&(all_trips_df['route_distance']<5000))
-    ind_5k_10k=((all_trips_df['route_distance']>5000)&(all_trips_df['route_distance']<10000))
-    ind_10kplus=all_trips_df['route_distance']>10000
-
-    all_trips_df.loc[ind_u1500==True, 'mode']=np.random.choice(
-        options, size=sum(ind_u1500), 
-        replace=True, p=[0.1, 0.2, 0.6, 0.1])
-
-    all_trips_df.loc[ind_1500_5k==True, 'mode']=np.random.choice(
-        options, size=sum(ind_1500_5k), 
-        replace=True, p=[0.25, 0.15, 0.3, 0.3])
-
-    all_trips_df.loc[ind_5k_10k==True, 'mode']=np.random.choice(
-        options, size=sum(ind_5k_10k), 
-        replace=True, p=[0.6, 0.04, 0.01, 0.35])
-
-    all_trips_df.loc[ind_10kplus==True, 'mode']=np.random.choice(
-        options, size=sum(ind_10kplus), 
-        replace=True, p=[0.9, 0.01, 0.01, 0.08])
-    return all_trips_df
 
 class Mobility_indicator(Indicator):
-    def setup(self, zones, geogrid, table_name, simpop_df, 
-              external_hw_tags=["motorway","motorway_link","trunk","trunk_link"],
+    def setup(self, zones, geogrid, table_name, simpop_df, mob_sys,
              mode_descriptions=None, profile_descriptions=None,
-             simpop_sample_frac=1, N_max=250):
+             simpop_sample_frac=1, N_max=250, mode_choice_model=None,
+             route_lengths=None):
         self.N_max=N_max
         self.simpop_sample_frac=simpop_sample_frac
         self.name='Mobility'
         self.create_trip_descriptions(mode_descriptions, profile_descriptions)
         self.geogrid=geogrid
-        self.external_hw_tags=external_hw_tags
         self.zones=zones
         self.table_name=table_name
+        # TODO: if route lengths is None (not precomputed), should get this by calling a method of the mob_sys
+        self.route_lengths=route_lengths
         self.base_simpop_df=simpop_df.copy()
-        self.build_mobsys() 
         print('Init simulation')
         grid_zones=self.create_grid_zones()
         model_zones=zones.loc[zones['model_area']]
         model_zones['grid_area']=False
         combined_zones=model_zones.append(grid_zones)
         sim_geoids=list(zones.loc[zones['sim_area']].index)+list(grid_zones.index)
-        self.sim=OpenCity.Simulation(simpop_df, self.mob_sys, combined_zones, sim_geoids=sim_geoids)
-        self.sim.set_choice_models(mode_chooser=mode_choice_model)
+        self.sim=Simulation.Simulation(simpop_df, mob_sys, combined_zones, sim_geoids=sim_geoids,
+            mode_descriptions=self.mode_descriptions, profile_descriptions=self.profile_descriptions)
+        if mode_choice_model is None:
+            self.sim.set_choice_models(mode_chooser=mode_choice_model)
         self.create_zone_dist_mat()
     
     def create_trip_descriptions(self, mode_descriptions, profile_descriptions):
@@ -631,56 +606,7 @@ class Mobility_indicator(Indicator):
         for area_col in ['model_area', 'sim_area', 'grid_area']:
             grid_zones[area_col]=1
         return grid_zones
-        
-    def build_mobsys(self):
-        print('Building Mobility System')
-        print('\t getting graph')
-        G_drive_sim = self.get_graph_buffered_to_hw_type(self.zones.loc[self.zones['sim_area']], 
-                                                       self.external_hw_tags, 'drive')
-        print('getting external roads')
-        G_drive_model=osmnx.graph_from_polygon(self.zones.loc[self.zones['model_area']].unary_union,
-                                 network_type='drive', custom_filter='["highway"~"{}"]'.format('|'.join(self.external_hw_tags)))
-        G_drive_combined=osmnx.graph.nx.compose(G_drive_model,G_drive_sim)
-#         for edge in list(G_walk.edges):
-#             G_walk.edges[edge]['speed_kph']=4.8
-        G_drive_combined=osmnx.add_edge_speeds(G_drive_combined)
-        G_drive_combined=PreCompOsmNet.simplify_network(G_drive_combined)
-        G_drive_combined=osmnx.add_edge_travel_times(G_drive_combined)
-        
-        for edge in list(G_drive_combined.edges):
-            G_drive_combined.edges[edge]['travel_time_walk']=G_drive_combined.edges[edge]['length']/(4800/3600)
-            G_drive_combined.edges[edge]['travel_time_cycle']=G_drive_combined.edges[edge]['length']/(14000/3600)
-            G_drive_combined.edges[edge]['travel_time_pt']=G_drive_combined.edges[edge]['length']/(25000/3600)
 
-        G_drive_combined=osmnx.utils_graph.get_undirected(G_drive_combined)
-#         fw_pred_drive=PreCompOsmNet.pre_compute_paths(G_drive_combined)
-
-        # Note: this approach will assume the same route for each mode but different travel times
-        # For different routes, would need to compute the fw result for each mode
-        fw_all, self.route_lengths=PreCompOsmNet.pre_compute_paths(G_drive_combined, 
-                                                         weight_metric='length', 
-                                                         save_route_costs=True)
-        pre_comp_drive=PreCompOsmNet.PreCompOSMNet(G_drive_combined, fw_all)
-        networks={'drive': pre_comp_drive, 'walk': pre_comp_drive, 'cycle': pre_comp_drive, 'pt': pre_comp_drive}
-        
-        drive_dict={
-            'target_network_id': 'drive',
-            'travel_time_metric': 'travel_time'}
-        walk_dict={
-            'target_network_id': 'walk',
-            'travel_time_metric': 'travel_time_walk'}
-        cycle_dict={
-            'target_network_id': 'cycle',
-            'travel_time_metric': 'travel_time_cycle'}
-        pt_dict={
-            'target_network_id': 'pt',
-            'travel_time_metric': 'travel_time_pt'}
-        
-        modes={'drive': OpenCity.Mode(drive_dict), 'walk': OpenCity.Mode(walk_dict),
-        'cycle': OpenCity.Mode(cycle_dict), 'pt': OpenCity.Mode(pt_dict)}
-
-        self.mob_sys=OpenCity.MobilitySystem(modes=modes,
-                              networks=networks)
         
     def create_zone_dist_mat(self):
         print('Computing zone-zone dist mat')
@@ -697,55 +623,6 @@ class Mobility_indicator(Indicator):
                 else:
                     self.dist_mat[zone_index[i]][zone_index[j]]=self.route_lengths[from_node][to_node] 
         
-    def get_graph_buffered_to_hw_type(self,geom, external_hw_tags, network_type):
-        for buffer in [i*200 for i in range(1, 10)]:
-            print('Buffer : {}'.format(buffer))
-            geom_projected=osmnx.projection.project_gdf(geom)
-            geom_projected_buffered=geom_projected.unary_union.buffer(buffer)
-
-            geom_projected_buffered_gdf=gpd.GeoDataFrame(geometry=[geom_projected_buffered], crs=geom_projected.crs)
-            geom_wgs_buffered_gdf=geom_projected_buffered_gdf.to_crs(geom.crs) 
-
-            G_temp=osmnx.graph.graph_from_polygon(geom_wgs_buffered_gdf.iloc[0]['geometry'], network_type=network_type)
-            all_hw_tags=[e[2]['highway'] for e in G_temp.edges(data=True)]
-
-            if any([tag in all_hw_tags for tag in external_hw_tags]):
-                return G_temp
-            print('Doesnt contain external link types')
-        print('Warning: internal network will not connect to external network')
-        return G_temp 
-        
-        
-    def routes_to_deckgl_trip(self, route_table):
-        mode_legend={}
-        for i in range(len(self.mode_descriptions)):
-            name=self.mode_descriptions[i]['name']
-            mode_legend[str(i)]={"color": self.mode_descriptions[i]['color'],
-                                "name": "{} : {}%".format(name.title(),
-                                                         100*sum(route_table['mode']==name)/len(route_table))}
-        profile_legend={}
-        for i in range(len(self.profile_descriptions)):
-            name=self.profile_descriptions[i]['name']
-            profile_legend[str(i)]={"color": self.profile_descriptions[i]['color'],
-                                "name": 'Income '+str(name)}
-        legend={'mode': mode_legend, "profile": profile_legend}
-        
-        mode_id_map={self.mode_descriptions[i]['name']: i for i in range(len(self.mode_descriptions))}
-        profile_id_map={self.profile_descriptions[i]['name']: i for i in range(len(self.profile_descriptions))}
-        
-        trips=[]
-        for ind, row in route_table.iterrows():
-            coords=[[int(c[0]*1e5)/1e5, int(c[1]*1e5)/1e5] for c in row['attributes']['coordinates']]
-            if len(coords)>1:
-                travel_time_metric=self.mob_sys.modes[row['mode']].travel_time_metric
-                cum_time=np.cumsum(row['attributes'][travel_time_metric])
-                start_time=int(row['start_time'])
-                timestamps=[int(start_time)] + [int(start_time)+ int(ct) for ct in cum_time]
-                this_trip={'path': coords, 'timestamps': timestamps}
-                this_trip['mode']=mode_id_map[row['mode']],
-                this_trip['profile']=profile_id_map[row['earnings']]
-                trips.append(this_trip)
-        return {'attr': legend, 'trips': trips}
     
     def geogrid_updates(self, geogrid_data):
         new_simpop=[]
@@ -821,9 +698,13 @@ class Mobility_indicator(Indicator):
         print('Route table')
         route_table=self.sim.get_routes_table(all_trips_df)
         print('DeckGL')
-        deckgl_trips=self.routes_to_deckgl_trip(route_table)
+        deckgl_trips=self.sim.routes_to_deckgl_trip(route_table)
         by_mode=route_table.groupby('mode').size()
-        ind=(by_mode['cycle']+by_mode['walk'])/by_mode.sum()
+        active=0
+        for mode in ['walk', 'cycle']:
+            if mode in by_mode:
+                active+=by_mode[mode]
+        ind=active/by_mode.sum()
         return deckgl_trips, ind
     
     def return_indicator(self, geogrid_data):
