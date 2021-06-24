@@ -568,7 +568,7 @@ class Mobility_indicator(Indicator):
         sim_geoids=list(zones.loc[zones['sim_area']].index)+list(grid_zones.index)
         self.sim=Simulation.Simulation(simpop_df, mob_sys, combined_zones, sim_geoids=sim_geoids,
             mode_descriptions=self.mode_descriptions, profile_descriptions=self.profile_descriptions)
-        if mode_choice_model is None:
+        if mode_choice_model is not None:
             self.sim.set_choice_models(mode_chooser=mode_choice_model)
         self.create_zone_dist_mat()
     
