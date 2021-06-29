@@ -690,11 +690,18 @@ class Mobility_indicator(Indicator):
     def simulate(self, simpop_df):
         print('Schedules and locations')
         simpop_df=self.sim.create_simple_HWH_schedules(simpop_df)
+        print('OD')
+        simpop_df_w_nodes=simpop_df.merge(self.sim.zones['possible_nodes_drive'], left_on='home_geoid', right_index=True, how='left').rename(columns={'possible_nodes_drive': 'home_nodes'})
+        simpop_df_w_nodes=simpop_df_w_nodes.merge(self.sim.zones['possible_nodes_drive'], left_on='work_geoid', right_index=True, how='left').rename(columns={'possible_nodes_drive': 'work_nodes'})
+        simpop_df_w_nodes['route_distance']=simpop_df_w_nodes.apply(lambda row: self.route_lengths[row['home_nodes'][0]]
+                                                                    [row['work_nodes'][0]], axis=1)
+        simpop_df_w_mode=self.sim.mode_chooser(simpop_df_w_nodes)
+        od_output=simpop_df_w_mode[['naics','earnings','home_geoid','work_geoid', 'mode']].to_dict(orient='records')
         print('Trip table')
-        all_trips_df=self.sim.create_trip_table(simpop_df)
-        all_trips_df['route_distance']=all_trips_df.apply(lambda row: self.route_lengths[row['from_possible_nodes_drive'][0]]
-                                                                    [row['to_possible_nodes_drive'][0]], axis=1)
-        all_trips_df=self.sim.mode_chooser(all_trips_df)
+        all_trips_df=self.sim.create_trip_table(simpop_df_w_mode)
+        # all_trips_df['route_distance']=all_trips_df.apply(lambda row: self.route_lengths[row['from_possible_nodes_drive'][0]]
+        #                                                             [row['to_possible_nodes_drive'][0]], axis=1)
+        # all_trips_df=self.sim.mode_chooser(all_trips_df)
         print('Route table')
         route_table=self.sim.get_routes_table(all_trips_df)
         print('DeckGL')
@@ -705,7 +712,7 @@ class Mobility_indicator(Indicator):
             if mode in by_mode:
                 active+=by_mode[mode]
         ind=active/by_mode.sum()
-        return deckgl_trips, ind
+        return od_output, deckgl_trips, ind
     
     def return_indicator(self, geogrid_data):
         print('Starting MM Update')
@@ -714,9 +721,10 @@ class Mobility_indicator(Indicator):
         new_simpop_df=pd.DataFrame(new_simpop)
         combined_simpop=self.base_simpop_df.append(new_simpop_df)
         sample_simpop_df=combined_simpop.sample(min(self.N_max, len(combined_simpop)))
-        deckgl_trips, ind=self.simulate(sample_simpop_df)
+        od_output, deckgl_trips, ind=self.simulate(sample_simpop_df)
         end_calc=datetime.datetime.now()
         self.post_trips(deckgl_trips)
+        self.post_od(od_output)
         end_post=datetime.datetime.now()
         print('Finished MM Update')
         print('\t calculation took {}'.format(end_calc-start_calc))
@@ -732,6 +740,21 @@ class Mobility_indicator(Indicator):
         r = requests.post(post_url+'/ABM2', data = json.dumps(deckgl_trips),
             headers={'Content-Type': 'application/json'})
         print('Post ABM: {}'.format(r))
+
+    def post_od(self, od_output):
+        post_url='https://cityio.media.mit.edu/api/table/'+self.table_name
+        r = requests.post(post_url+'/od', data = json.dumps(od_output),
+            headers={'Content-Type': 'application/json'})
+        print('Post OD: {}'.format(r))
+        
+    def get_combined_zones(self):
+        comb_zones=self.sim.zones
+        comb_zones.index.name='GEOID'
+        return self.sim.zones
+    
+    def get_edges_geojson(self, network_name):
+        G_gdf=osmnx.utils_graph.graph_to_gdfs(self.sim.mob_sys.networks[network_name].G, nodes=False, edges=True)
+        return G_gdf[['geometry', 'speed_kph', 'from', 'to']]
 
 
 if __name__ == "__main__":
