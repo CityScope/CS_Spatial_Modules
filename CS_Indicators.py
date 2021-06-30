@@ -695,8 +695,8 @@ class Mobility_indicator(Indicator):
         simpop_df_w_nodes=simpop_df_w_nodes.merge(self.sim.zones['possible_nodes_drive'], left_on='work_geoid', right_index=True, how='left').rename(columns={'possible_nodes_drive': 'work_nodes'})
         simpop_df_w_nodes['route_distance']=simpop_df_w_nodes.apply(lambda row: self.route_lengths[row['home_nodes'][0]]
                                                                     [row['work_nodes'][0]], axis=1)
-        simpop_df_w_mode=self.sim.mode_chooser(simpop_df_w_nodes)
-        od_output=simpop_df_w_mode[['naics','earnings','home_geoid','work_geoid', 'mode']].to_dict(orient='records')
+        simpop_df_w_mode=self.sim.mode_chooser.predict_modes(simpop_df_w_nodes)
+        od_output=simpop_df_w_mode[self.sim.person_attributes].to_dict(orient='records')
         print('Trip table')
         all_trips_df=self.sim.create_trip_table(simpop_df_w_mode)
         # all_trips_df['route_distance']=all_trips_df.apply(lambda row: self.route_lengths[row['from_possible_nodes_drive'][0]]

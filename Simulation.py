@@ -9,43 +9,11 @@ Created on Tue Dec 22 16:32:27 2020
 import pandas as pd
 import geopandas as gpd
 import numpy as np
-#from numpy.random import choice
-import us
 import math
-import urllib.request as ur
-from gzip import GzipFile
 import random
 from shapely.geometry import Point, LineString
 import json
 import os
-
-def default_mode_choice_model(all_trips_df):
-#     all_trips_df['mode']=random.choices(['walk', 'drive'], k=len(all_trips_df))
-    # all_trips_df['route_distance']=all_trips_df.apply(lambda row: m.route_lengths[row['from_possible_nodes_drive'][0]]
-    #                                                                     [row['to_possible_nodes_drive'][0]], axis=1)
-    options=['drive', 'cycle', 'walk', 'pt']
-    all_trips_df['mode']='drive'
-    ind_u1500=all_trips_df['route_distance']<1500
-    ind_1500_5k=((all_trips_df['route_distance']>1500)&(all_trips_df['route_distance']<5000))
-    ind_5k_10k=((all_trips_df['route_distance']>5000)&(all_trips_df['route_distance']<10000))
-    ind_10kplus=all_trips_df['route_distance']>10000
-
-    all_trips_df.loc[ind_u1500==True, 'mode']=np.random.choice(
-        options, size=sum(ind_u1500), 
-        replace=True, p=[0.1, 0.2, 0.6, 0.1])
-
-    all_trips_df.loc[ind_1500_5k==True, 'mode']=np.random.choice(
-        options, size=sum(ind_1500_5k), 
-        replace=True, p=[0.25, 0.15, 0.3, 0.3])
-
-    all_trips_df.loc[ind_5k_10k==True, 'mode']=np.random.choice(
-        options, size=sum(ind_5k_10k), 
-        replace=True, p=[0.6, 0.04, 0.01, 0.35])
-
-    all_trips_df.loc[ind_10kplus==True, 'mode']=np.random.choice(
-        options, size=sum(ind_10kplus), 
-        replace=True, p=[0.9, 0.01, 0.01, 0.08])
-    return all_trips_df
 
 def coord_list_to_line_string(coordinates):
     if len(coordinates)>1:
@@ -54,6 +22,18 @@ def coord_list_to_line_string(coordinates):
         return Point(coordinates)
     else:
         return None
+
+
+class Default_Mode_Choice_model():
+    def __init__(self):
+        pass
+    
+    def predict_modes(self, all_trips_df):
+        options=['drive', 'cycle', 'walk', 'pt']
+        all_trips_df['mode']=np.random.choice(
+            options, size=len(all_trips_df), 
+            replace=True, p=[0.6, 0.1, 0.2, 0.1])
+        return all_trips_df
 
 class PdnaNetwork():
     """
@@ -186,7 +166,7 @@ class Simulation():
     def __init__(self, sim_pop, mob_sys, zones,  sim_geoids=None, person_attributes=None, mode_descriptions=None, profile_descriptions=None):
         # self.scheduler=self.default_scheduler
         # self.location_chooser=self.default_location_chooser
-        self.mode_chooser=default_mode_choice_model
+        self.mode_chooser=Default_Mode_Choice_model()
         self.check_zones(sim_pop, zones)           
         self.mob_sys=mob_sys
         self.zones=zones
@@ -202,7 +182,7 @@ class Simulation():
         #     self.create_zone_dist_mat()
         if person_attributes==None:
             person_attributes=[col for col in sim_pop.columns if col not in [
-                        'home_geoid', 'work_geoid']]
+                        'home_geoid', 'work_geoid']]+['mode']
         self.person_attributes=person_attributes
         # if ((centre_x_y is not None) and (vis_radius is not None)):
         #     self.get_vis_nodes()
@@ -388,7 +368,8 @@ class Simulation():
                       'person_id': row.name,
                       'start_time': start_times[i+1]}
                 for attr in self.person_attributes:
-                    trip[attr]=row[attr]
+                    if attr in row:
+                        trip[attr]=row[attr]
                 all_trips.append(trip)
         all_trips_df=pd.DataFrame(all_trips)
         columns_to_join=[col for col in self.zones if 'possible' in col]
