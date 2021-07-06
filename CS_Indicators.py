@@ -98,6 +98,8 @@ class Proximity_Indicator(Indicator):
         self.overlapping_geoids=list(zones.loc[zones['sim_area']].index)
         self.all_site_ids=self.overlapping_geoids+list(range(len(geogrid))) 
         self.get_graph_reference_area()
+
+
         
         print('\t Getting central nodes')
         zones_nearest_nodes, zones_nearest_dist= get_central_nodes(self.zones, self.ref_G)
@@ -124,6 +126,11 @@ class Proximity_Indicator(Indicator):
                             'walkable_shopping': {'col':'emp_naics_44-45', 'from': 'source_res'}}
             for name in poi_names:
                 self.score_dict[name]={'walkable_{}'.format(name): {'col': name, 'from': 'source_res'}}
+
+        for score in self.score_dict:
+            if self.score_dict[score]['col'] not in self.zones.columns:
+                self.zones[self.score_dict[score]['col']]=0
+
         self.get_reachable_geoms_from_all()
         self.calculate_baseline_scores()
             
@@ -246,10 +253,10 @@ class Proximity_Indicator(Indicator):
 
         scores={}
         for score_name in self.score_dict:
-        	if totals[self.score_dict[score_name]['from']]==0:
-        		scores[score_name]=0
-        	else:
-	        	scores[score_name]=sum([s[self.score_dict[score_name]['from']]*s[self.score_dict[score_name]['col']] for s in attributes])/totals[self.score_dict[score_name]['from']]
+            if totals[self.score_dict[score_name]['from']]==0:
+                scores[score_name]=0
+            else:
+                scores[score_name]=sum([s[self.score_dict[score_name]['from']]*s[self.score_dict[score_name]['col']] for s in attributes])/totals[self.score_dict[score_name]['from']]
         return scores
     
     def return_indicator(self, geogrid_data):
@@ -342,7 +349,7 @@ class Proximity_Indicator(Indicator):
 
 
     def compute_heatmaps(self, grid_reachable_area_stats):
-        max_scores={score: self.base_zones_scores[score].max() for score in self.base_zones_scores}
+        max_scores={score: max(1, self.base_zones_scores[score].max()) for score in self.base_zones_scores}
         features=[]
         heatmap={'type': 'FeatureCollection',
                  'properties': [c.split('_')[1] for c in self.score_dict]}
@@ -628,7 +635,12 @@ class Mobility_indicator(Indicator):
         new_simpop=[]
         cols_to_zero= [col for col in self.sim.zones.columns if (
             ('emp_' in col) or ('res_' in col))]
-        self.sim.zones.loc[self.sim.zones.grid_area==True, cols_to_zero]=0
+        res_cols=[col for col in self.sim.zones.columns if'res_' in col]
+        # Initialise vacant residential assuming 4% vacancy rate of existing housing
+        zones_copy=self.sim.zones.copy()
+        zones_copy[res_cols]*=0.04
+        zones_copy.loc[zones_copy.grid_area==True, cols_to_zero]=0
+
         side_length=geogrid_data.get_geogrid_props()['header']['cellSize']
         type_def=geogrid_data.get_type_info()
         for i_c, cell in enumerate(geogrid_data):
@@ -647,9 +659,9 @@ class Mobility_indicator(Indicator):
                 # update where the residential capacity exists
                 if ('res_income' in type_info):
                     if type_info['res_income'] is not None:
-                        self.sim.zones.loc[i_c, 'res_total']=total_capacity
+                        zones_copy.loc[i_c, 'res_total']=total_capacity
                         for income_level in type_info['res_income']:
-                            self.sim.zones.loc[i_c, 'res_income_{}'.format(income_level)
+                            zones_copy.loc[i_c, 'res_income_{}'.format(income_level)
                                               ]=type_info['res_income'][income_level]*total_capacity
         for i_c, cell in enumerate(geogrid_data):
             name=cell['name']
@@ -671,7 +683,7 @@ class Mobility_indicator(Indicator):
                         # TODO: choose the income level based on a mapping from NAICS to income level
                         # estimate from the available data
                         profile=random.sample([p['name'] for p in self.profile_descriptions], 1)[0]
-                        home_locations=self.sample_home_locations(i_c, profile, n=workers[code])
+                        home_locations=self.sample_home_locations(zones_copy, i_c, profile, n=workers[code])
                         for i_w in range(workers[code]):
                             new_simpop.append({'work_geoid': i_c,'home_geoid': home_locations[i_w],
                                                'naics': code, 'earnings': profile,
@@ -679,13 +691,13 @@ class Mobility_indicator(Indicator):
 
         return new_simpop
             
-    def sample_home_locations(self, work_geoid, earnings, n):
-        attraction=self.sim.zones['res_income_{}'.format(earnings)]
-        impedance=[self.dist_mat[hid][work_geoid] for hid in self.sim.zones.index]
-        weights=np.divide(attraction,np.array(impedance))
+    def sample_home_locations(self, zones_copy, work_geoid, earnings, n, beta=1):
+        attraction=zones_copy['res_income_{}'.format(earnings)]
+        impedance=[self.dist_mat[hid][work_geoid] for hid in zones_copy.index]
+        weights=np.divide(attraction,np.power(impedance, beta))
 #         weights=np.array(attraction)
         return np.random.choice(
-            self.sim.zones.index, replace=True, p=weights/sum(weights), size=n)
+            zones_copy.index, replace=True, p=weights/sum(weights), size=n)
         
     def simulate(self, simpop_df):
         print('Schedules and locations')
