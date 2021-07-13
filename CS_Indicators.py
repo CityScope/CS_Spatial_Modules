@@ -159,23 +159,23 @@ class Proximity_Indicator(Indicator):
 #         self.base_scores={'walkable_{}'.format(x): [] for x in [
 #             'employment', 'housing', 'healthcare', 'hospitality', 'shopping']}
         base_scores={}
-        self.base_attributes={}
+        self.base_reachable_attributes={}
         self.score_ranges={}
         stats_to_aggregate=[col for col in self.zones.columns if (('res_' in col) or ('emp_' in col))]
         # get the baseline reachable attributes and scores for every zone
         for ind, row in self.zones.loc[self.zones['reference_area']].iterrows():
             reachable_zones=self.zone_to_reachable[ind]['zones']
-            self.base_attributes[ind]=self.zones.loc[reachable_zones][stats_to_aggregate].sum().to_dict()
-            self.base_attributes[ind]['source_res']=row['res_total']
-            self.base_attributes[ind]['source_emp']=row['emp_total']
+            self.base_reachable_attributes[ind]=self.zones.loc[reachable_zones][stats_to_aggregate].sum().to_dict()
+            self.base_reachable_attributes[ind]['source_res']=row['res_total']
+            self.base_reachable_attributes[ind]['source_emp']=row['emp_total']
             # Add the aggregated point POIs if there are any
             if self.pois is not None:
             	reachable_pois=self.zone_to_reachable[ind]['pois']
             	agg_reachable_poi=self.pois.loc[reachable_pois].sum()
             	for name in self.poi_names:
-            		self.base_attributes[ind][name]=agg_reachable_poi[name]
+            		self.base_reachable_attributes[ind][name]=agg_reachable_poi[name]
             # get scores for individual zones- weighting cancels out
-            base_scores[ind]=self.attributes_to_scores([self.base_attributes[ind]])
+            base_scores[ind]=self.attributes_to_scores([self.base_reachable_attributes[ind]])
             
         # Create the ranges for each score using only the zones (not the grid cells
         # TODO: avoid repetition with thr Density indicator
@@ -191,26 +191,26 @@ class Proximity_Indicator(Indicator):
             
         # get weighted scores across the simulation area zones 
         # (ignore the grid which is empty in reference and therefore would be weighted zero)
-#         ref_scores=self.attributes_to_scores([self.base_attributes[ind] for ind in self.sim_area_geoids])
+#         ref_scores=self.attributes_to_scores([self.base_reachable_attributes[ind] for ind in self.sim_area_geoids])
 #         self.ref_ind=self.normalise_ind(ref_scores)
             
         # get the base reachable attributes for every grid cell location
         for i_c in range(len(self.geogrid)):
             reachable_zones=self.grid_to_reachable[i_c]['zones']
-            self.base_attributes[i_c]=self.zones.loc[reachable_zones][stats_to_aggregate].sum().to_dict()
+            self.base_reachable_attributes[i_c]=self.zones.loc[reachable_zones][stats_to_aggregate].sum().to_dict()
             if self.pois is not None:
             	reachable_pois=self.grid_to_reachable[i_c]['pois']
             	agg_reachable_poi=self.pois.loc[reachable_pois].sum()
             	for name in self.poi_names:
-            		self.base_attributes[i_c][name]=agg_reachable_poi[name]
+            		self.base_reachable_attributes[i_c][name]=agg_reachable_poi[name]
                     
     def calculate_baseline_ind(self, ref_geogrid_data):
         if ref_geogrid_data is None:
-            ref_scores=self.attributes_to_scores([self.base_attributes[ind] for ind in self.sim_area_geoids])
+            ref_scores=self.attributes_to_scores([self.base_reachable_attributes[ind] for ind in self.sim_area_geoids])
         else:
-            ref_attributes=self.get_new_reachable_attributes(ref_geogrid_data)
-            ref_attributes_site= [ref_attributes[ind] for ind in self.all_site_ids]
-            ref_scores=self.attributes_to_scores(ref_attributes_site)
+            ref_reachable_attributes=self.get_new_reachable_attributes(ref_geogrid_data)
+            ref_reachable_attributes_site= [ref_reachable_attributes[ind] for ind in self.all_site_ids]
+            ref_scores=self.attributes_to_scores(ref_reachable_attributes_site)
         self.ref_ind=self.normalise_ind(ref_scores)
             
     def get_reachable_geoms(self, zone, tolerance):
@@ -277,9 +277,9 @@ class Proximity_Indicator(Indicator):
     def return_indicator(self, geogrid_data):
         start_ind_calc=datetime.datetime.now()
         # make copy of base_scores
-        new_attributes=self.get_new_reachable_attributes(geogrid_data)
-        new_attributes_site= [new_attributes[ind] for ind in self.all_site_ids]
-        new_scores=self.attributes_to_scores(new_attributes_site)
+        new_reachable_attributes=self.get_new_reachable_attributes(geogrid_data)
+        new_reachable_attributes_site= [new_reachable_attributes[ind] for ind in self.all_site_ids]
+        new_scores=self.attributes_to_scores(new_reachable_attributes_site)
         new_ind=self.normalise_ind(new_scores)
         outputs=[]
         for ind_name in new_scores:
@@ -290,8 +290,8 @@ class Proximity_Indicator(Indicator):
                             'viz_type': self.viz_type})
         end_ind_calc=datetime.datetime.now()
         
-        new_attributes_site= [new_attributes[i_c] for i_c in range(len(geogrid_data))]
-        heatmap=self.compute_heatmaps(new_attributes_site)
+        new_reachable_attributes_grid= [new_reachable_attributes[i_c] for i_c in range(len(geogrid_data))]
+        heatmap=self.compute_heatmaps(new_reachable_attributes_grid)
         
         end_hm_calc=datetime.datetime.now()
         
@@ -302,10 +302,14 @@ class Proximity_Indicator(Indicator):
     
     
     def get_new_reachable_attributes(self, geogrid_data):
-        new_attributes=copy.deepcopy(self.base_attributes) # the updated REACHABLE attributes for every zone and cell
+        new_reachable_attributes=copy.deepcopy(self.base_reachable_attributes) # the updated REACHABLE attributes for every zone and cell
         side_length=geogrid_data.get_geogrid_props()['header']['cellSize']
         cell_area=side_length*side_length
         type_def=geogrid_data.get_type_info()
+        # For each cell
+            # calculate the new attributes at this cell
+            # increment the source attributes for this cell
+            # increment the reachable attributes for every geometry which can reach this cell
         for i_c, cell in enumerate(geogrid_data):
             name=cell['name']
             height=cell['height']
@@ -327,7 +331,7 @@ class Proximity_Indicator(Indicator):
             if name in self.poi_names:
             	added_attributes[name]=height
             cell_employment=sum(agg_naics.values())
-            new_attributes[i_c]['source_emp']=cell_employment
+            new_reachable_attributes[i_c]['source_emp']=cell_employment
             added_attributes['emp_total']=cell_employment
 
             if '1' in agg_lbcs:
@@ -336,7 +340,7 @@ class Proximity_Indicator(Indicator):
                 cell_population=0
 
             added_attributes['res_total']=cell_population
-            new_attributes[i_c]['source_res']=cell_population
+            new_reachable_attributes[i_c]['source_res']=cell_population
 
             for combined_code in self.naics_codes:
                 naics_codes=combined_code.split('naics_')[1].split('-')
@@ -350,11 +354,11 @@ class Proximity_Indicator(Indicator):
             reverse_reachable=self.grid_to_reverse_reachable[i_c]
             for ind_z in reverse_reachable['zones']:
                 for attr in added_attributes:
-                    new_attributes[ind_z][attr]+=added_attributes[attr]
+                    new_reachable_attributes[ind_z][attr]+=added_attributes[attr]
             for j_c in reverse_reachable['cells']:
                 for attr in added_attributes:
-                    new_attributes[j_c][attr]+=added_attributes[attr] 
-        return new_attributes
+                    new_reachable_attributes[j_c][attr]+=added_attributes[attr] 
+        return new_reachable_attributes
 
     def normalise_ind(self, raw_ind):
         norm_ind={}
