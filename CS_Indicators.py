@@ -21,24 +21,25 @@ import random
 """
 """
 
-def aggregate_types_over_grid(geogrid_data, side_length, type_def):
+def aggregate_types_over_grid(geogrid_data, side_length, type_def, interactive_only=True):
     cell_area=side_length*side_length
     aggregated={}  
     for cell in geogrid_data:
-        name=cell['name']
-        type_info=type_def[name]
-        height=cell['height']
-        if isinstance(height, list):
-            height=height[-1]
-        if 'sqm_pperson' in type_info:
-            sqm_pperson=type_info['sqm_pperson']
-        else:
-            sqm_pperson=50
-        total_capacity=height*cell_area/sqm_pperson
-        if name in aggregated:
-            aggregated[name]+=total_capacity
-        else:
-            aggregated[name]=total_capacity
+    	if ((cell['interactive']=='Web') or (interactive_only==False)):
+	        name=cell['name']
+	        type_info=type_def[name]
+	        height=cell['height']
+	        if isinstance(height, list):
+	            height=height[-1]
+	        if 'sqm_pperson' in type_info:
+	            sqm_pperson=type_info['sqm_pperson']
+	        else:
+	            sqm_pperson=50
+	        total_capacity=height*cell_area/sqm_pperson
+	        if name in aggregated:
+	            aggregated[name]+=total_capacity
+	        else:
+	            aggregated[name]=total_capacity
     return aggregated
 
 def aggregate_attributes_over_grid(agg_types, attribute, side_length, type_def, digits=None):
@@ -85,7 +86,8 @@ def prob_floor(num):
     return result
 
 class Proximity_Indicator(Indicator):
-    def setup(self, zones, geogrid, buffer=1200, pois=None, poi_names=[], score_dict=None, limit_factor=2):
+    def setup(self, zones, geogrid, buffer=1200, pois=None, poi_names=[], score_dict=None, 
+              range_factor=2, ref_geogrid_data=None):
         print('Setting up Proximity Indicator')
         self.name='Proximity'
         self.indicator_type = 'hybrid'
@@ -95,12 +97,10 @@ class Proximity_Indicator(Indicator):
         self.buffer=buffer
         self.zones=zones
         self.geogrid=geogrid
-        self.overlapping_geoids=list(zones.loc[zones['sim_area']].index)
-        self.all_site_ids=self.overlapping_geoids+list(range(len(geogrid))) 
+        self.sim_area_geoids=list(zones.loc[zones['sim_area']].index)
+        self.all_site_ids=self.sim_area_geoids+list(range(len(geogrid))) 
         self.get_graph_reference_area()
-
-
-        
+       
         print('\t Getting central nodes')
         zones_nearest_nodes, zones_nearest_dist= get_central_nodes(self.zones, self.ref_G)
         self.zones['central_node']=zones_nearest_nodes
@@ -132,7 +132,8 @@ class Proximity_Indicator(Indicator):
                 self.zones[self.score_dict[score]['col']]=0
 
         self.get_reachable_geoms_from_all()
-        self.calculate_baseline_scores()
+        self.calculate_baseline_scores(range_factor)
+        self.calculate_baseline_ind(ref_geogrid_data)
             
             
     def make_ego_graph_around_geometry(self, zone, tolerance):
@@ -152,14 +153,14 @@ class Proximity_Indicator(Indicator):
         reference_zone_graph=self.get_network_around_geom_buffered(reference_zones)
         self.ref_G=reference_zone_graph
         
-    def calculate_baseline_scores(self):
+    def calculate_baseline_scores(self, range_factor):
         # TODO: should use the get_reachable_geoms function?
         print('\t Calculating baseline scores')
 #         self.base_scores={'walkable_{}'.format(x): [] for x in [
 #             'employment', 'housing', 'healthcare', 'hospitality', 'shopping']}
         base_scores={}
         self.base_attributes={}
-        self.score_ecdfs={}
+        self.score_ranges={}
         stats_to_aggregate=[col for col in self.zones.columns if (('res_' in col) or ('emp_' in col))]
         # get the baseline reachable attributes and scores for every zone
         for ind, row in self.zones.loc[self.zones['reference_area']].iterrows():
@@ -176,16 +177,22 @@ class Proximity_Indicator(Indicator):
             # get scores for individual zones- weighting cancels out
             base_scores[ind]=self.attributes_to_scores([self.base_attributes[ind]])
             
-        # Create the ECDFs for each score using only the zones (not the grid cells
+        # Create the ranges for each score using only the zones (not the grid cells
+        # TODO: avoid repetition with thr Density indicator
         self.base_zones_scores=pd.DataFrame.from_dict(base_scores, orient='index')
         for score in self.base_zones_scores.columns:
             base_scores_no_nan=[x for x in self.base_zones_scores[score] if x==x]
-            self.score_ecdfs[score]=ECDF(base_scores_no_nan)
+            min_range, max_range=min(base_scores_no_nan), max(base_scores_no_nan)
+            max_range=min_range+range_factor*(max_range-min_range)
+            diff=max((1, max_range-min_range))
+            self.score_ranges[score]={'min': min_range,
+                                     'max': max_range,
+                                     'range': diff}
             
         # get weighted scores across the simulation area zones 
         # (ignore the grid which is empty in reference and therefore would be weighted zero)
-        ref_scores=self.attributes_to_scores([self.base_attributes[ind] for ind in self.overlapping_geoids])
-        self.ref_ind=self.normalise_ind(ref_scores)
+#         ref_scores=self.attributes_to_scores([self.base_attributes[ind] for ind in self.sim_area_geoids])
+#         self.ref_ind=self.normalise_ind(ref_scores)
             
         # get the base reachable attributes for every grid cell location
         for i_c in range(len(self.geogrid)):
@@ -196,7 +203,15 @@ class Proximity_Indicator(Indicator):
             	agg_reachable_poi=self.pois.loc[reachable_pois].sum()
             	for name in self.poi_names:
             		self.base_attributes[i_c][name]=agg_reachable_poi[name]
-            
+                    
+    def calculate_baseline_ind(self, ref_geogrid_data):
+        if ref_geogrid_data is None:
+            ref_scores=self.attributes_to_scores([self.base_attributes[ind] for ind in self.sim_area_geoids])
+        else:
+            ref_attributes=self.get_new_reachable_attributes(ref_geogrid_data)
+            ref_attributes_site= [ref_attributes[ind] for ind in self.all_site_ids]
+            ref_scores=self.attributes_to_scores(ref_attributes_site)
+        self.ref_ind=self.normalise_ind(ref_scores)
             
     def get_reachable_geoms(self, zone, tolerance):
         """
@@ -249,7 +264,7 @@ class Proximity_Indicator(Indicator):
     	# TODO: more flexibly caclulate scores based on supplied data      
         totals={}
         totals['source_res']=sum([s['source_res'] for s in attributes])
-        totals['source_emp']=sum([s['source_res'] for s in attributes])
+        totals['source_emp']=sum([s['source_emp'] for s in attributes])
 
         scores={}
         for score_name in self.score_dict:
@@ -344,12 +359,10 @@ class Proximity_Indicator(Indicator):
     def normalise_ind(self, raw_ind):
         norm_ind={}
         for ind_name in raw_ind:
-            norm_ind[ind_name]=self.score_ecdfs[ind_name](raw_ind[ind_name])       
+            norm_ind[ind_name]=min(1, (raw_ind[ind_name] - self.score_ranges[ind_name]['min'])/ self.score_ranges[ind_name]['range'])     
         return norm_ind
 
-
     def compute_heatmaps(self, grid_reachable_area_stats):
-        max_scores={score: max(1, self.base_zones_scores[score].max()) for score in self.base_zones_scores}
         features=[]
         heatmap={'type': 'FeatureCollection',
                  'properties': [c.split('_')[1] for c in self.score_dict]}
@@ -357,7 +370,7 @@ class Proximity_Indicator(Indicator):
         for i_c, cell_stats in enumerate(grid_reachable_area_stats):
             features.append({
               "type": "Feature",
-              "properties": [min((cell_stats[self.score_dict[s]['col']]/max_scores[s]), 1) for s in self.score_dict],
+              "properties": [min(1, (cell_stats[self.score_dict[s]['col']] - self.score_ranges[s]['min'])/ self.score_ranges[s]['range']) for s in self.score_dict],
               "geometry": {
                 "type": "Point",
                 "coordinates": [
@@ -382,20 +395,20 @@ class Proximity_Indicator(Indicator):
         return osmnx.graph.graph_from_polygon(geom_wgs_buffered_gdf.iloc[0]['geometry'], network_type='walk')
 
 class Density_Indicator(Indicator):
-    def setup(self, zones):
+    def setup(self, zones, ref_geogrid_data=None, range_factor=2):
         self.name='Density'
         self.zones=zones
-        self.overlapping_geoids=list(zones.loc[zones['sim_area']].index)
+        self.sim_area_geoids=list(zones.loc[zones['sim_area']].index)
         self.grid_cell_area=None
-        self.compute_base_score_distribution()
+        self.compute_base_score_distribution(range_factor)
+        self.compute_base_ind(ref_geogrid_data)
                 
-    def compute_base_score_distribution(self):
+    def compute_base_score_distribution(self, range_factor):
         """
-        computes ECDFs of the indicators across the baseline zones
-        the ECDFs are later used to nromalise indicators by finding the percentile rank of the updated site wrt
-        the baseline zones
+        computes ranges of the indicators across the static region
+        the ranges are later used to normalise indicators
         """
-        self.score_ecdfs={}
+        self.score_ranges={}
         self.base_scores={}
         self.base_scores['res_density']=self.zones.apply(lambda row: self.res_density(row), axis=1)
         self.base_scores['emp_density']=self.zones.apply(lambda row: self.emp_density(row), axis=1)
@@ -412,11 +425,17 @@ class Density_Indicator(Indicator):
             lambda row: self.get_diversity(row, species_columns=res_income_columns), axis=1)
         
         for score in self.base_scores:
-#             plt.figure()
-#             plt.hist(self.base_scores[score])
-#             plt.title(score)
             base_scores_no_nan=[x for x in self.base_scores[score] if x==x]
-            self.score_ecdfs[score]=ECDF(base_scores_no_nan)
+            min_range, max_range=min(base_scores_no_nan), max(base_scores_no_nan)
+            max_range=min_range+range_factor*(max_range-min_range)
+            diff=max((1, max_range-min_range))
+            self.score_ranges[score]={'min': min_range,
+                                     'max': max_range,
+                                     'range': diff}
+
+    def compute_base_ind(self, ref_geogrid_data):
+        base_site_stats=self.combine_site_attributes(ref_geogrid_data)
+        self.base_ind=self.calculate_indicators(base_site_stats)
         
     def combine_site_attributes(self, geogrid_data=None):
         """
@@ -425,23 +444,18 @@ class Density_Indicator(Indicator):
         aggregates them together to get the updated site stats
         """
         stats_to_aggregate=['area']+[col for col in self.zones.columns if (('res_' in col) or ('emp_' in col))]
-        temp_site_stats=dict(self.zones.loc[self.overlapping_geoids, 
+        temp_site_stats=dict(self.zones.loc[self.sim_area_geoids, 
                                                  stats_to_aggregate].sum())
         if geogrid_data is not None:
             side_length=geogrid_data.get_geogrid_props()['header']['cellSize']
             type_def=geogrid_data.get_type_info()
             agg_types=aggregate_types_over_grid(geogrid_data, side_length=side_length, type_def=type_def)
             agg_naics=aggregate_attributes_over_grid(agg_types, 'NAICS', side_length=side_length, type_def=type_def, digits=2)
-#             agg_lbcs=aggregate_attributes_over_grid(agg_types, 'LBCS', side_length=side_length, type_def=type_def, digits=1)
-            agg_res=aggregate_attributes_over_grid(agg_types, 'res_income', side_length=side_length, type_def=type_def, digits=1)
+            agg_res=aggregate_attributes_over_grid(agg_types, 'res_income', side_length=side_length, type_def=type_def)
             
             # update total residential and total employment
             add_emp=sum(agg_naics.values())
-            add_res=sum(agg_res.values())
-#             if '1' in agg_lbcs:
-#                 add_res=agg_lbcs['1']
-#             else:
-#                 add_res=0    
+            add_res=sum(agg_res.values())   
             temp_site_stats['res_total']+=add_res
             temp_site_stats['emp_total']+=add_emp
             
@@ -459,15 +473,7 @@ class Density_Indicator(Indicator):
                 if 'res_income_' in col:
                     income_level=col.split('res_income_')[1]
                     if income_level in agg_res:
-                        temp_site_stats[col]+=agg_res[income_level]             
-                            
-#             # update residential types
-#             if 'Residential Low Income' in agg_types:
-#                 temp_site_stats['res_income_low']+=agg_types['Residential Low Income']
-#             if 'Residential Med Income' in agg_types:
-#                 temp_site_stats['res_income_mid']+=agg_types['Residential Med Income']
-#             if 'Residential High Income' in agg_types:
-#                 temp_site_stats['res_income_high']+=agg_types['Residential High Income']          
+                        temp_site_stats[col]+=agg_res[income_level]                    
         return temp_site_stats
 
     
@@ -485,7 +491,10 @@ class Density_Indicator(Indicator):
                
         norm_ind={}
         for ind_name in raw_ind:
-            norm_ind[ind_name]=self.score_ecdfs[ind_name](raw_ind[ind_name])       
+            if 'density' in ind_name:
+                norm_ind[ind_name]=min(1, (raw_ind[ind_name] - self.score_ranges[ind_name]['min'])/ self.score_ranges[ind_name]['range']) 
+            else:
+                norm_ind[ind_name]=raw_ind[ind_name]
         return {'raw': raw_ind, 'norm': norm_ind}
                   
     def return_indicator(self, geogrid_data):
@@ -493,15 +502,15 @@ class Density_Indicator(Indicator):
         new_site_stats=self.combine_site_attributes(geogrid_data=geogrid_data)
         new_ind=self.calculate_indicators(new_site_stats)
         
-        base_site_stats=self.combine_site_attributes(geogrid_data=None)
-        base_ind=self.calculate_indicators(base_site_stats)
+#         base_site_stats=self.combine_site_attributes(geogrid_data=None)
+#         base_ind=self.calculate_indicators(base_site_stats)
         
         outputs=[]
         for ind_name in new_ind['raw']:
             outputs.append({'name': ind_name.replace('_', ' ').title(),
                            'raw_value': new_ind['raw'][ind_name],
                            'value': new_ind['norm'][ind_name],
-                           'ref_value': base_ind['norm'][ind_name]})
+                           'ref_value': self.base_ind['norm'][ind_name]})
         end_ind_calc=datetime.datetime.now()
         print('Dens Ind: {}'.format(end_ind_calc-start_ind_calc))
 #         print(outputs)
@@ -531,7 +540,7 @@ class Density_Indicator(Indicator):
     def get_live_work_score(obj):
         if obj['emp_total']*obj['res_total']==0:
             return 0
-        if obj['emp_total'] > obj['res_total']:
+        if obj['emp_total'] < obj['res_total']:
             return obj['emp_total']/obj['res_total']
         else:
             return obj['res_total']/obj['emp_total']
