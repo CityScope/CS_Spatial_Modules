@@ -26,6 +26,8 @@ Specify
 - Optionally: a center coordinate and radius  to restrict the analysis to
 
 ```
+import US_State
+
 fips=25
 year=2017
 geom_type='block'
@@ -35,7 +37,7 @@ centre_x_y=[centre['lon'], centre['lat']]
 model_area_radius=5000
 sim_area_radius=2000
 
-state=OpenCity.US_State(state_fips=fips, year=year, 
+state=US_State.US_State(state_fips=fips, year=year, 
 #                         geom_type=geom_type
                        )
 state.get_geometry()
@@ -65,6 +67,7 @@ Get the road network(s). These are used to create [pandana](https://github.com/U
 ```
 import pandana
 import osmnet
+import Simulation
 
 networks={}
 
@@ -78,7 +81,7 @@ drive_edges_df['travel_time']=drive_edges_df['distance']*50000/3600
 drive_net=pandana.Network(drive_nodes_df["x"], drive_nodes_df["y"], drive_edges_df["from"], drive_edges_df["to"],
                  drive_edges_df[["distance", "travel_time"]])
 
-networks['drive']=OpenCity.PdnaNetwork(drive_net)
+networks['drive']=Simulation.PdnaNetwork(drive_net)
  ```
 Define modes of transportation
 ```
@@ -87,19 +90,20 @@ drive_dict={
     'travel_time_metric': 'travel_time'}
 
 
-modes={'drive': OpenCity.Mode(drive_dict)}
+modes={'drive': Simulation.Mode(drive_dict)}
 ```
 
 Create mobility system using the pandana network(s) and mode definition(s)
 
 ```
-mob_sys=MobilitySystem(modes=modes,
+import Simulation
+mob_sys=Simulation.MobilitySystem(modes=modes,
                       networks=networks)
 ```
 #### Create the Simulation Model
 In order to reduct computational burden, the population can be further restricted to a maximum by using the "sample_N" parameter
 ```
-sim=OpenCity.Simulation(simpop_df, mob_sys, model_zones)
+sim=Simulation.Simulation(simpop_df, mob_sys, model_zones)
 simpop_df=sim.get_simpop_subset(simpop_df, sample_N=1000)
 
 ```
@@ -142,6 +146,7 @@ The data required are:
 - the simulated population (can be created from an O-D matrix using OpenCity as outlined above)
 
 ### Usage
+```
 import CS_Indicators as CS
 from brix import Indicator, Handler
 import geopandas as gpd
@@ -166,6 +171,6 @@ H.add_indicators([
 ])
 
 H.listen()
-
+```
 
 
