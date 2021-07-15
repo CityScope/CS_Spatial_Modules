@@ -76,7 +76,7 @@ drive_nodes_df,drive_edges_df=osmnet.load.network_from_bbox(lat_min=bbox[1], lng
                           lng_max=bbox[2], bbox=None, network_type='drive', 
                           two_way=True, timeout=180, 
                           custom_osm_filter=None)
-drive_edges_df['travel_time']=drive_edges_df['distance']*50000/3600
+drive_edges_df['travel_time']=drive_edges_df['distance']/(50000/3600)
 
 drive_net=pandana.Network(drive_nodes_df["x"], drive_nodes_df["y"], drive_edges_df["from"], drive_edges_df["to"],
                  drive_edges_df[["distance", "travel_time"]])
