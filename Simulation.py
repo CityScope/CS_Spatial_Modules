@@ -339,8 +339,9 @@ class Simulation():
         start_times=(3600*np.column_stack((np.zeros((len(simpop_df),1)), np.cumsum(durations_total, axis=1)))).astype(int)
         simpop_df['start_times']=[list(start_times[s,:]) for s in range(len(simpop_df))]
 
-        sim_zones=self.zones.loc[self.sim_geoids]
-        simpop_df['other_place']=sim_zones.sample(len(simpop_df), weights='emp_naics_72',replace=True).index
+        sim_zones=self.zones.loc[self.sim_geoids].copy()
+        sim_zones['other_attraction']=sim_zones['emp_naics_72']+sim_zones['emp_naics_71']
+        simpop_df['other_place']=sim_zones.sample(len(simpop_df), weights='other_attraction',replace=True).index
 
         simpop_df['locations']=simpop_df.apply(lambda row: [row['home_geoid'],
                                                         row['work_geoid'],

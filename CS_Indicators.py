@@ -659,7 +659,7 @@ class Mobility_indicator(Indicator):
         for i_c, cell in enumerate(geogrid_data):
             name=cell['name']
             type_info=type_def[name]
-            if not name =='None':
+            if ((not name =='None') and (not cell['interactive']==False)):
                 height=cell['height']
                 cell_area=side_length*side_length
                 if isinstance(height, list):
