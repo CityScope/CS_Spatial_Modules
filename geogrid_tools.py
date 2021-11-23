@@ -65,6 +65,25 @@ def assign_sim_area(geogrid, zones):
     return zones
 
 
+def select_geom_by_overlap_threshold(areas_to_filter, 
+                                     filter_with, 
+                                     area_id_col,
+                                     min_prop=0.5):
+    """ identify areas in one GeoDataFrame which have a percentage overlap 
+    with another GeoDataFrame
+    at least as great as the minimum specified"""
+    areas_to_filter['zone_area']=areas_to_filter.geometry.area
+    all_intersect=gpd.overlay(areas_to_filter, filter_with, 'intersection')
+    all_intersect['intersect_area']=all_intersect.geometry.area
+    all_intersect=all_intersect[[col for col in all_intersect if not col=='zone_area']]
+    all_intersect=all_intersect.merge(areas_to_filter[[area_id_col, 'zone_area']], 
+                                    how='left', left_on=area_id_col, right_on=area_id_col)
+    all_intersect['prop_area']=all_intersect['intersect_area']/all_intersect['zone_area']
+    valid_intersect=all_intersect.loc[all_intersect['prop_area']>min_prop]
+    valid_ids=list(valid_intersect[area_id_col])
+    return valid_ids
+
+
 def init_geogrid(table_name, types, interactive_zone=None):
     """
     initialises the available types on the front-end to a default list from text file
