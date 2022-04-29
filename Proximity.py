@@ -155,10 +155,11 @@ class Proximity_Indicator(Indicator):
         self.prox_model.target_settings=target_settings
 
     def get_cs_heatmap(self, heatmap):
+        heatmap.geometry=heatmap.geometry.centroid
         cs_heatmap=heatmap.__geo_interface__
-        target_list=[t for t in self.target_settings]
+        target_list=[t for t in self.prox_model.target_settings]
         cs_heatmap['properties']=target_list
-        for i_f in range(len(cs_heatmap['features'])):
+        for i_f, feat in enumerate(cs_heatmap['features']):
             prox_list=[feat['properties']['{}_norm'.format(t)] for t in target_list]
             cs_heatmap['features'][i_f]['properties']=prox_list
         return cs_heatmap
@@ -213,6 +214,6 @@ class Proximity_Indicator(Indicator):
                  'ref_value': self.baseline_scores[t]['norm']} for t in scores]
         print('Proximity calculation took {} seconds'.format(datetime.datetime.now() - start_time))
 
-        heatmap=self.prox_model.get_heatmap(access_df)
+        heatmap=self.prox_model.get_heatmap(updated_places.loc[updated_places['source']], access_df)
         cs_heatmap=self.get_cs_heatmap(heatmap)
         return {'heatmap':cs_heatmap,'numeric':result}
