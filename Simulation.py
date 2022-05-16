@@ -530,7 +530,7 @@ class Simulation():
         return trips       
   
     def route_table_to_geo(self, route_table):    
-        route_table['line_string']=route_table.apply(lambda row: 
+        route_table['geometry']=route_table.apply(lambda row: 
             coord_list_to_line_string(row['attributes']['coordinates']), axis=1)
         route_gdf=gpd.GeoDataFrame(route_table, geometry='line_string')
         return route_gdf
