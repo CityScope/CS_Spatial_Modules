@@ -58,22 +58,24 @@ def get_target_capacities(row, cell_area):
 
 class prox_model():
     def __init__(self, places, max_dist, target_settings,
+                network=None,
                 network_type='walk'):
         self.max_dist=max_dist
         self.places=places
-        self.network_type=network_type
         self.target_settings=target_settings
-          
-        self.get_network(impact_area=places.loc[places['source']])
+        if network is None:  
+            self.get_network(impact_area=places.loc[places['source']], network_type=network_type)
+        else:
+            self.net=network
         self.find_closest_nodes()
         self.build_dist_mat()
         
-    def get_network(self, impact_area):
+    def get_network(self, impact_area, network_type):
         print('Getting network inside buffered outline from OSM')
         buffer_outline=get_buffered_outline(impact_area, self.max_dist)
         bbox=tuple(buffer_outline.total_bounds)
         self.nodes_df, self.edges_df=osmnet.load.network_from_bbox(
-            bbox=bbox,network_type=self.network_type, two_way=True)
+            bbox=bbox,network_type=network_type, two_way=True)
         self.net=pandana.Network(self.nodes_df["x"], self.nodes_df["y"], 
                                       self.edges_df["from"], self.edges_df["to"],
                  self.edges_df[["distance"]])
@@ -185,8 +187,9 @@ class Proximity_Indicator(Indicator):
                         geogrid_data_df[col_name]+=geogrid_data_df[type_name]*code_prop
                         
         # get total residents and total employees
-        res_cols=[col for col in geogrid_data_df if col.startswith('lbcs_1')]
-        emp_cols=[col for col in geogrid_data_df if col.startswith('naics_')]
+        # print(geogrid_data_df.columns)
+        res_cols=[col for col in geogrid_data_df.columns if col.startswith('lbcs_1')]
+        emp_cols=[col for col in geogrid_data_df.columns if col.startswith('naics_')]
         geogrid_data_df['res_total']=geogrid_data_df[res_cols].sum(axis=1)
         geogrid_data_df['emp_total']=geogrid_data_df[emp_cols].sum(axis=1)
         
